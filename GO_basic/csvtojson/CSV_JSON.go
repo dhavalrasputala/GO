@@ -1,10 +1,39 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"net/http"
 )
 
+func uploadfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+	file, handler, err := r.FormFile("uploadfile")
+	if err != nil {
+		w.Write([]byte("Error Handling your file "))
+		return
+	}
+	defer file.Close()
+	csvReader := csv.NewReader(file)
+	data, err := csvReader.ReadAll()
+	if err != nil {
+		w.Write([]byte("Error Handling your file "))
+		return
+	}
+
+	jsondata, err := CSVtoJSON(data)
+	if err != nil {
+		w.Write([]byte("Error Handling your file "))
+		return
+	}
+	w.Write([]byte(string(jsondata)))
+
+	fmt.Fprintf(w, "File Converted successfully: %v", handler.Filename)
+}
 func CSVtoJSON(Data [][]string) ([]byte, error) {
 	headers := Data[0]
 	var records []map[string]string
@@ -20,16 +49,7 @@ func CSVtoJSON(Data [][]string) ([]byte, error) {
 }
 
 func main() {
-	data := [][]string{
-		{"Vegetable", "Fruit", "Rank"},
-		{"Carrot", "Apple", "1"},
-		{"Potato", "Banana", "2"},
-	}
-
-	jsonData, err := CSVtoJSON(data)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-	fmt.Println(string(jsonData))
+	http.HandleFunc("/upload", uploadfile)
+	fmt.Println("Starting server at :8080")
+	http.ListenAndServe(":8080", nil)
 }
