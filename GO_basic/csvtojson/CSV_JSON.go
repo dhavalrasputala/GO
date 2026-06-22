@@ -4,11 +4,18 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
+	"sync"
 )
 
+type fileResult struct {
+	Data  json.RawMessage `json:"data,omitempty"`
+	Error string          `json:"error,omitempty"`
+}
+
 func uploadfile(w http.ResponseWriter, r *http.Request) {
-	results := make(map[int]json.RawMessage)
+
 	if r.Method != "POST" {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
@@ -25,35 +32,36 @@ func uploadfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	results := make([]fileResult, len(files))
+	var wg sync.WaitGroup
+
 	for i, handler := range files {
-		file, err := handler.Open()
-		if err != nil {
-			results[i+1] = json.RawMessage(
-				fmt.Sprintf(`{"error":"%v"}`, err),
-			)
-			continue
-		}
+		wg.Add(1)
+		go func(h *multipart.FileHeader, idx int) {
+			defer wg.Done()
+			file, err := h.Open()
+			if err != nil {
+				results[idx] = fileResult{Error: err.Error()}
+				return
+			}
 
-		csvReader := csv.NewReader(file)
-		data, err := csvReader.ReadAll()
-		if err != nil {
-			results[i+1] = json.RawMessage(
-				fmt.Sprintf(`{"error":"%v"}`, err),
-			)
-			continue
-		}
-		file.Close()
+			csvReader := csv.NewReader(file)
+			data, err := csvReader.ReadAll()
+			if err != nil {
+				results[idx] = fileResult{Error: err.Error()}
+				return
+			}
+			file.Close()
 
-		jsonData, err := CSVtoJSON(data)
-		if err != nil {
-			results[i+1] = json.RawMessage(
-				fmt.Sprintf(`{"error":"%v"}`, err),
-			)
-			continue
-		}
-
-		results[i+1] = json.RawMessage(jsonData)
+			jsonData, err := CSVtoJSON(data)
+			if err != nil {
+				results[idx] = fileResult{Error: err.Error()}
+				return
+			}
+			results[idx] = fileResult{Data: jsonData}
+		}(handler, i)
 	}
+	wg.Wait()
 	w.Header().Set("Content-Type", "application/json")
 
 	if err := json.NewEncoder(w).Encode(results); err != nil {
