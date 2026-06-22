@@ -8,40 +8,71 @@ import (
 )
 
 func uploadfile(w http.ResponseWriter, r *http.Request) {
+	results := make(map[int]json.RawMessage)
 	if r.Method != "POST" {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
 	}
-	file, handler, err := r.FormFile("uploadfile")
-	if err != nil {
-		w.Write([]byte("Error Handling your file "))
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		http.Error(w, "Error parsing multipart form", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
-	csvReader := csv.NewReader(file)
-	data, err := csvReader.ReadAll()
-	if err != nil {
-		w.Write([]byte("Error Handling your file "))
+	files := r.MultipartForm.File["uploadfiles"]
+	if len(files) == 0 {
+		http.Error(w, "No files uploaded", http.StatusBadRequest)
 		return
 	}
 
-	jsondata, err := CSVtoJSON(data)
-	if err != nil {
-		w.Write([]byte("Error Handling your file "))
-		return
-	}
-	w.Write([]byte(string(jsondata)))
+	for i, handler := range files {
+		file, err := handler.Open()
+		if err != nil {
+			results[i+1] = json.RawMessage(
+				fmt.Sprintf(`{"error":"%v"}`, err),
+			)
+			continue
+		}
 
-	fmt.Fprintf(w, "File Converted successfully: %v", handler.Filename)
+		csvReader := csv.NewReader(file)
+		data, err := csvReader.ReadAll()
+		if err != nil {
+			results[i+1] = json.RawMessage(
+				fmt.Sprintf(`{"error":"%v"}`, err),
+			)
+			continue
+		}
+		file.Close()
+
+		jsonData, err := CSVtoJSON(data)
+		if err != nil {
+			results[i+1] = json.RawMessage(
+				fmt.Sprintf(`{"error":"%v"}`, err),
+			)
+			continue
+		}
+
+		results[i+1] = json.RawMessage(jsonData)
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	if err := json.NewEncoder(w).Encode(results); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 func CSVtoJSON(Data [][]string) ([]byte, error) {
+	if len(Data) == 0 {
+		return nil, fmt.Errorf("empty CSV file")
+	}
 	headers := Data[0]
 	var records []map[string]string
 
 	for _, line := range Data[1:] {
 		rec := make(map[string]string)
 		for j, field := range line {
-			rec[headers[j]] = field
+			if j < len(headers) {
+				rec[headers[j]] = field
+			}
 		}
 		records = append(records, rec)
 	}
@@ -51,5 +82,8 @@ func CSVtoJSON(Data [][]string) ([]byte, error) {
 func main() {
 	http.HandleFunc("/upload", uploadfile)
 	fmt.Println("Starting server at :8080")
-	http.ListenAndServe(":8080", nil)
+	err := http.ListenAndServe(":8080", nil)
+	if err != nil {
+		fmt.Println("Server error:", err)
+	}
 }
